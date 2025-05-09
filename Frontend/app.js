@@ -56,27 +56,65 @@ document.addEventListener('DOMContentLoaded', () => {
             hideError();
 
             console.log("Fetching stock levels from:", STOCK_LEVELS_API);
-            const response = await fetch(STOCK_LEVELS_API);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+            const response = await fetch(STOCK_LEVELS_API, {
+                signal: controller.signal,
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}`);
             }
 
+            const contentType = response.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                console.error("API did not return JSON. Content-Type:", contentType);
+                throw new Error("API did not return JSON data");
+            }
+
             const data = await response.json();
-            console.log("Received products data:", data);
+            console.log("API Response:", data);
 
-            displayStockData(data);
+            // Verify data structure
+            if (!data) {
+                console.error("API returned null or undefined data");
+                throw new Error("API returned empty data");
+            }
 
-            // Store products in cache before doing anything else
-            productsCache = Array.isArray(data) ? data : [];
-
-            // Ensure we have valid product data before populating dropdowns
-            if (productsCache.length > 0) {
-                populateProductDropdowns(productsCache);
-                console.log("Product dropdowns populated successfully");
+            // Store products in cache first - handle both array and object with results
+            if (Array.isArray(data)) {
+                console.log("API returned an array of", data.length, "products");
+                productsCache = data;
+            } else if (data.results && Array.isArray(data.results)) {
+                console.log("API returned an object with results array of", data.results.length, "products");
+                productsCache = data.results;
             } else {
-                console.warn("Received empty or invalid products array:", data);
-                showError("Received empty or invalid products data from server");
+                console.error("API returned unexpected data format:", data);
+                productsCache = [];
+            }
+
+            // Display stock data after caching
+            displayStockData(productsCache);
+
+            // Debug what's in the product cache
+            console.log("Products in cache:", productsCache);
+            if (productsCache.length > 0) {
+                console.log("Sample product:", productsCache[0]);
+            }
+
+            // Populate dropdowns only if we have products
+            if (productsCache.length > 0) {
+                console.log("Populating product dropdowns with products");
+                populateProductDropdowns(productsCache);
+            } else {
+                console.warn("No products available to populate dropdowns");
+                showError("No products found in database. Please add products first.");
             }
 
             return data;
@@ -230,41 +268,80 @@ document.addEventListener('DOMContentLoaded', () => {
     // Populate product dropdown for form
     const populateProductDropdowns = (products) => {
         try {
-            console.log("Populating product dropdowns with products:", products);
+            console.log("Starting to populate dropdowns with", products.length, "products");
 
-            // First, check if the DOM elements exist
-            if (!productFilter || !movementProduct) {
-                console.error("Product dropdown elements not found in the DOM");
+            // Re-fetch elements to ensure we have them
+            const productFilterElem = document.getElementById('productFilter');
+            const movementProductElem = document.getElementById('movementProduct');
+
+            if (!productFilterElem) {
+                console.error("productFilter element not found in DOM!");
+            }
+
+            if (!movementProductElem) {
+                console.error("movementProduct element not found in DOM!");
+            }
+
+            if (!productFilterElem || !movementProductElem) {
+                console.error("Critical dropdown elements missing from DOM");
                 return;
             }
 
             // Clear existing options except the first one from filter dropdown
-            while (productFilter.options.length > 1) {
-                productFilter.remove(1);
+            while (productFilterElem.options.length > 1) {
+                productFilterElem.remove(1);
             }
 
             // Clear existing options except the first one from form dropdown
-            while (movementProduct.options.length > 1) {
-                movementProduct.remove(1);
+            while (movementProductElem.options.length > 1) {
+                movementProductElem.remove(1);
             }
 
             // Add products to both dropdowns
+            let filterAdded = 0;
+            let formAdded = 0;
+
             if (products && products.length > 0) {
                 products.forEach(product => {
+                    // More detailed validation
+                    if (product.id === undefined || product.id === null) {
+                        console.warn("Product missing ID:", product);
+                        return; // Skip this product
+                    }
+
+                    if (!product.name) {
+                        console.warn("Product missing name:", product);
+                        return; // Skip this product
+                    }
+
                     // For filter dropdown
-                    const filterOption = document.createElement('option');
-                    filterOption.value = product.id;
-                    filterOption.textContent = product.name || `Product ${product.id}`;
-                    productFilter.appendChild(filterOption);
+                    try {
+                        const filterOption = document.createElement('option');
+                        filterOption.value = product.id;
+                        filterOption.textContent = product.name;
+                        productFilterElem.appendChild(filterOption);
+                        filterAdded++;
+                    } catch (err) {
+                        console.error("Error adding to filter dropdown:", err);
+                    }
 
                     // For form dropdown
-                    const formOption = document.createElement('option');
-                    formOption.value = product.id;
-                    formOption.textContent = product.name || `Product ${product.id}`;
-                    movementProduct.appendChild(formOption);
+                    try {
+                        const formOption = document.createElement('option');
+                        formOption.value = product.id;
+                        formOption.textContent = product.name;
+                        movementProductElem.appendChild(formOption);
+                        formAdded++;
+                    } catch (err) {
+                        console.error("Error adding to movement dropdown:", err);
+                    }
                 });
 
-                console.log(`Added ${products.length} products to dropdowns`);
+                console.log(`Added ${filterAdded} products to filter dropdown and ${formAdded} to movement dropdown`);
+
+                // Verify options were added
+                console.log(`Filter dropdown now has ${productFilterElem.options.length} options`);
+                console.log(`Movement dropdown now has ${movementProductElem.options.length} options`);
             } else {
                 console.warn("No products to populate dropdowns with");
             }
